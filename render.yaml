@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: certatlas
+    runtime: static
+    repo: https://github.com/anon-3m9q8x/CertAtlas
+    branch: main
+    buildCommand: ""
+    staticPublishPath: .
+    autoDeploy: true
+    headers:
+      - path: /data/*
+        name: Cache-Control
+        value: public, max-age=300
