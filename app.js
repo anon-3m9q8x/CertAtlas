@@ -181,7 +181,8 @@ async function render() {
 function renderCatalog() {
   main.replaceChildren(document.querySelector('#catalog').content.cloneNode(true));
   const items = grouped(all());
-  const total = items.reduce((sum, item) => sum + countQuestions(item), 0);
+  // 高度試験の午前I は応用情報の午前問題を共用しているため、総数では重複して数えない。
+  const total = items.reduce((sum, item) => sum + countQuestions(item) - (item.levels || [item]).reduce((n, level) => n + (index[level.id]?.shared || 0), 0), 0);
   const available = items.filter(item => countQuestions(item)).length;
   main.querySelector('#stats').innerHTML = '<span><strong>' + items.length + '</strong>掲載資格</span><span><strong>' + available +
     '</strong>演習対応資格</span><span><strong>' + total + '</strong>演習問題</span>';
@@ -220,7 +221,15 @@ function renderReview(item) {
 // 「模擬」を含むセットは模擬試験として別枠に表示する。
 const isMock = set => /模擬/.test(set);
 const PRACTICE_ALL = '__practice';
-const inSet = set => question => set === PRACTICE_ALL ? !isMock(question.set) : !set || question.set === set;
+// 問題集は PRACTICE_ALL、試験区分ごとの問題集は PRACTICE_ALL + ':' + 区分名。
+const inSet = set => question => {
+  if (set.startsWith(PRACTICE_ALL)) {
+    const part = set.slice(PRACTICE_ALL.length + 1);
+    return !isMock(question.set) && (!part || question.part === part);
+  }
+  return !set || question.set === set;
+};
+const partsOf = item => index[item.id]?.parts || null;
 function renderPractice(item) {
   const questions = questionsOf(item);
   const sets = [...new Set(questions.map(question => question.set))];
@@ -230,8 +239,11 @@ function renderPractice(item) {
   main.innerHTML = '<h1>問題演習</h1><p>' + escapeHtml(item.name) + '</p>' +
     (questions.length ? '<p class="subtext">全' + questions.length + '問 ・ 回答済み ' + answered +
       '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p>' +
-      (drillCount ? '<section class="box"><h2>問題集</h2><p class="subtext">分野別・基本の演習問題をまとめた問題集です。</p><div class="set-list">' +
-        setButton(item, PRACTICE_ALL, '問題集', drillCount) + '</div></section>' : '') +
+      (drillCount ? '<section class="box"><h2>問題集</h2><p class="subtext">' + (partsOf(item) ? '試験区分ごとに分かれた問題集です。' : '分野別・基本の演習問題をまとめた問題集です。') + '</p><div class="set-list">' +
+        (partsOf(item)
+          ? partsOf(item).map(([part, size]) => size ? setButton(item, PRACTICE_ALL + ':' + part, part, size) :
+              '<div class="set-button is-empty"><span class="set-name"><strong>' + escapeHtml(part) + '</strong><small>この区分の問題は準備中です</small></span><span class="badge soon">準備中</span></div>').join('')
+          : setButton(item, PRACTICE_ALL, '問題集', drillCount)) + '</div></section>' : '') +
       (mocks.length ? '<section class="box mock-box"><h2>模擬試験</h2><p class="subtext">本番形式の模擬試験です。セットごとに通しで解いて実力を確認しましょう。</p><div class="set-list">' +
         mocks.map(set => setButton(item, set, set, questions.filter(inSet(set)).length)).join('') + '</div></section>' : '')
       : '<section class="box"><p><span class="badge soon">準備中</span> このレベルの演習問題は準備中です。自作問題は追加できます。</p></section>') +
@@ -711,7 +723,7 @@ function renderQuiz() {
     '<div class="quiz-head"><div><p class="subtext">' + escapeHtml(quiz.item.name) + ' ・ ' + escapeHtml(quiz.label) + '</p><h1 id="quiz-title">問題演習</h1></div>' +
     '<div class="quiz-score">' + score + ' / ' + done.length + ' 正解<button class="outline" data-quit>演習を終了</button></div></div>' +
     statusBar() +
-    '<article class="question-card"><p class="q-meta"><span>問 ' + (quiz.index + 1) + ' / ' + quiz.rows.length + '</span><span class="tag">' + escapeHtml(isMock(question.set) ? question.set : '問題集') + '</span>' +
+    '<article class="question-card"><p class="q-meta"><span>問 ' + (quiz.index + 1) + ' / ' + quiz.rows.length + '</span><span class="tag">' + escapeHtml(isMock(question.set) ? question.set : (question.part ? question.part + ' ・ ' : '') + '問題集') + '</span>' +
     (question.type === 'multiple' ? '<span class="tag">' + needed(question) + 'つ選択</span>' : '') + '</p>' +
     '<h2 class="q-text">' + escapeHtml(question.q) + '</h2>' + (question.code ? '<pre class="q-code">' + escapeHtml(question.code) + '</pre>' : '') +
     body + feedback +
@@ -802,7 +814,7 @@ document.addEventListener('click', event => {
   if (action.start) {
     const item = all().find(entry => entry.id === action.start);
     const set = action.set || '';
-    start(item, questionsOf(item).filter(inSet(set)), set === PRACTICE_ALL ? '問題集' : set || 'すべての問題');
+    start(item, questionsOf(item).filter(inSet(set)), set.startsWith(PRACTICE_ALL) ? ['問題集', set.slice(PRACTICE_ALL.length + 1)].filter(Boolean).join(' ・ ') : set || 'すべての問題');
   }
   if ('review' in action) { const item = selectedLevel(); start(item, missedOf(item), '弱点復習'); }
   if ('close' in action) modal.close();

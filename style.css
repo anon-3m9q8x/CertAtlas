@@ -242,3 +242,4 @@ a.button.outline{color:var(--text);border:1px solid var(--edge);border-radius:9p
   .plan-kpi strong{font-size:18px}
 }
 @media(max-width:650px){.school-layout .school-nav.open{flex-direction:column;gap:8px}}
+.set-button.is-empty{opacity:.75;cursor:default;border-style:dashed}
