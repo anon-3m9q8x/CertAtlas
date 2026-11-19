@@ -222,16 +222,14 @@ const inSet = set => question => set === PRACTICE_ALL ? !isMock(question.set) : 
 function renderPractice(item) {
   const questions = questionsOf(item);
   const sets = [...new Set(questions.map(question => question.set))];
-  const drills = sets.filter(set => !isMock(set));
   const mocks = sets.filter(isMock).sort((a, b) => a.localeCompare(b, 'ja', { numeric: true }));
   const drillCount = questions.filter(inSet(PRACTICE_ALL)).length;
   const answered = questions.filter(question => recordOf(item, question)).length;
   main.innerHTML = '<h1>問題演習</h1><p>' + escapeHtml(item.name) + '</p>' +
     (questions.length ? '<p class="subtext">全' + questions.length + '問 ・ 回答済み ' + answered +
       '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p>' +
-      (drills.length ? '<section class="box"><h2>問題集</h2><p class="subtext">分野別・基本の演習問題です。</p><div class="set-list">' +
-        (drills.length > 1 ? setButton(item, PRACTICE_ALL, '問題集をすべて', drillCount) : '') +
-        drills.map(set => setButton(item, set, set, questions.filter(inSet(set)).length)).join('') + '</div></section>' : '') +
+      (drillCount ? '<section class="box"><h2>問題集</h2><p class="subtext">分野別・基本の演習問題をまとめた問題集です。</p><div class="set-list">' +
+        setButton(item, PRACTICE_ALL, '問題集', drillCount) + '</div></section>' : '') +
       (mocks.length ? '<section class="box mock-box"><h2>模擬試験</h2><p class="subtext">本番形式の模擬試験です。セットごとに通しで解いて実力を確認しましょう。</p><div class="set-list">' +
         mocks.map(set => setButton(item, set, set, questions.filter(inSet(set)).length)).join('') + '</div></section>' : '')
       : '<section class="box"><p><span class="badge soon">準備中</span> このレベルの演習問題は準備中です。自作問題は追加できます。</p></section>') +
@@ -382,7 +380,7 @@ function renderQuiz() {
     '<div class="quiz-head"><div><p class="subtext">' + escapeHtml(quiz.item.name) + ' ・ ' + escapeHtml(quiz.label) + '</p><h1 id="quiz-title">問題演習</h1></div>' +
     '<div class="quiz-score">' + score + ' / ' + done.length + ' 正解<button class="outline" data-quit>演習を終了</button></div></div>' +
     statusBar() +
-    '<article class="question-card"><p class="q-meta"><span>問 ' + (quiz.index + 1) + ' / ' + quiz.rows.length + '</span><span class="tag">' + escapeHtml(question.set) + '</span>' +
+    '<article class="question-card"><p class="q-meta"><span>問 ' + (quiz.index + 1) + ' / ' + quiz.rows.length + '</span><span class="tag">' + escapeHtml(isMock(question.set) ? question.set : '問題集') + '</span>' +
     (question.type === 'multiple' ? '<span class="tag">' + needed(question) + 'つ選択</span>' : '') + '</p>' +
     '<h2 class="q-text">' + escapeHtml(question.q) + '</h2>' + (question.code ? '<pre class="q-code">' + escapeHtml(question.code) + '</pre>' : '') +
     body + feedback +
