@@ -204,7 +204,8 @@ function renderResults() {
     return (filter.type === 'すべて' || item.type === filter.type) &&
       (filter.material === 'all' || filter.material === mode) && parts.every(part => haystack.includes(part));
   });
-  const items = grouped(matches);
+  // 演習問題がある資格を先に、準備中の資格を後ろに並べる(各グループ内の順序は維持)。
+  const items = grouped(matches).sort((a, b) => (countQuestions(b) > 0) - (countQuestions(a) > 0));
   main.querySelector('#count').textContent = items.length + '件の資格';
   main.querySelector('#results').innerHTML = items.length ? items.map(card).join('') : '<p class="box">条件に一致する資格がありません。</p>';
 }
@@ -238,21 +239,33 @@ function renderReview(item = null) {
       missed.map(question => '<article class="box"><h3>' + escapeHtml(question.q) + '</h3></article>').join('') :
       '<p class="box">このレベルに復習対象の問題はありません。</p>');
 }
+// 「模擬」を含むセットは模擬試験として別枠に表示する。
+const isMock = set => /模擬/.test(set);
+const PRACTICE_ALL = '__practice';
+const inSet = set => question => set === PRACTICE_ALL ? !isMock(question.set) : !set || question.set === set;
 function renderPractice(item) {
   const questions = questionsOf(item);
   const sets = [...new Set(questions.map(question => question.set))];
+  const drills = sets.filter(set => !isMock(set));
+  const mocks = sets.filter(isMock).sort((a, b) => a.localeCompare(b, 'ja', { numeric: true }));
+  const drillCount = questions.filter(inSet(PRACTICE_ALL)).length;
   const answered = questions.filter(question => recordOf(item, question)).length;
   main.innerHTML = '<h1>問題演習</h1><p>' + escapeHtml(item.name) + '</p>' +
-    (questions.length ? '<section class="box"><h2>出題セットを選ぶ</h2><p class="subtext">全' + questions.length + '問 ・ 回答済み ' + answered +
-      '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p><div class="set-list">' +
-      setButton(item, '', 'すべての問題', questions.length) +
-      sets.map(set => setButton(item, set, set, questions.filter(question => question.set === set).length)).join('') +
-      '</div></section>' : '<section class="box"><p><span class="badge soon">準備中</span> このレベルの演習問題は準備中です。自作問題は追加できます。</p></section>') +
+    (questions.length ? '<p class="subtext">全' + questions.length + '問 ・ 回答済み ' + answered +
+      '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p>' +
+      (drills.length ? '<section class="box"><h2>問題集</h2><p class="subtext">分野別・基本の演習問題です。</p><div class="set-list">' +
+        (drills.length > 1 ? setButton(item, PRACTICE_ALL, '問題集をすべて', drillCount) : '') +
+        drills.map(set => setButton(item, set, set, questions.filter(inSet(set)).length)).join('') + '</div></section>' : '') +
+      (mocks.length ? '<section class="box mock-box"><h2>模擬試験</h2><p class="subtext">本番形式の模擬試験です。セットごとに通しで解いて実力を確認しましょう。</p><div class="set-list">' +
+        mocks.map(set => setButton(item, set, set, questions.filter(inSet(set)).length)).join('') + '</div></section>' : '')
+      : '<section class="box"><p><span class="badge soon">準備中</span> このレベルの演習問題は準備中です。自作問題は追加できます。</p></section>') +
     '<div class="actions"><button class="outline" data-question="' + item.id + '">問題を追加</button></div>';
 }
 function setButton(item, set, label, size) {
-  return '<button class="set-button" data-start="' + item.id + '" data-set="' + escapeHtml(set) + '"><strong>' + escapeHtml(label) +
-    '</strong><span>' + size + '問</span></button>';
+  const rows = questionsOf(item).filter(inSet(set)).map(question => recordOf(item, question)).filter(Boolean);
+  const right = rows.filter(record => record.last).length;
+  return '<button class="set-button" data-start="' + item.id + '" data-set="' + escapeHtml(set) + '"><span class="set-name"><strong>' + escapeHtml(label) +
+    '</strong><small>' + (rows.length ? '回答 ' + rows.length + '/' + size + ' ・ 正解 ' + right + '問' : '未回答') + '</small></span><span>' + size + '問</span></button>';
 }
 function show(title, contents) {
   modalTitle.textContent = title;
@@ -489,7 +502,7 @@ document.addEventListener('click', event => {
   if (action.start) {
     const item = all().find(entry => entry.id === action.start);
     const set = action.set || '';
-    start(item, questionsOf(item).filter(question => !set || question.set === set), set || 'すべての問題');
+    start(item, questionsOf(item).filter(inSet(set)), set === PRACTICE_ALL ? '問題集' : set || 'すべての問題');
   }
   if ('review' in action) { const item = selectedLevel(); start(item, missedOf(item), '弱点復習'); }
   if (!quiz) { exportData(action); return; }
