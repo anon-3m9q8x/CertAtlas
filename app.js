@@ -122,8 +122,8 @@ document.querySelector('#theme').onclick = () => {
 function card(item) {
   const size = countQuestions(item);
   return '<article class="card course-card"><a class="course-link" href="' + schoolURL(item) + '" aria-label="' + escapeHtml(item.name) + 'の専用サイトを開く"><div class="card-top"><span class="icon" aria-hidden="true">' +
-    icons[types.indexOf(item.type)] + '</span><span class="badge ' + (size ? 'ready' : '') + '">' +
-    (size ? '演習 ' + size + '問' : 'カタログのみ') + '</span></div><h3>' +
+    icons[types.indexOf(item.type)] + '</span><span class="badge ' + (size ? 'ready' : 'soon') + '">' +
+    (size ? '演習 ' + size + '問' : '準備中') + '</span></div><h3>' +
     escapeHtml(item.name) + '</h3><p>' + escapeHtml(item.type) + ' / ' +
     escapeHtml(item.issuer || '追加した資格') + (item.levels ? ' ・ ' + item.levels.length + '段階' : '') + '</p><span class="course-cta">専用サイトで学ぶ</span></a></article>';
 }
@@ -247,7 +247,7 @@ function renderPractice(item) {
       '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p><div class="set-list">' +
       setButton(item, '', 'すべての問題', questions.length) +
       sets.map(set => setButton(item, set, set, questions.filter(question => question.set === set).length)).join('') +
-      '</div></section>' : '<section class="box"><p>このレベルの演習は未収録です。自作問題を追加できます。</p></section>') +
+      '</div></section>' : '<section class="box"><p><span class="badge soon">準備中</span> このレベルの演習問題は準備中です。自作問題は追加できます。</p></section>') +
     '<div class="actions"><button class="outline" data-question="' + item.id + '">問題を追加</button></div>';
 }
 function setButton(item, set, label, size) {
@@ -271,7 +271,7 @@ function renderCourse(item) {
   main.innerHTML = '<section class="hero course-hero"><div class="hero-inner"><div class="eyebrow">学習ホーム</div><h1>' + escapeHtml(family?.name || item.name) + '</h1><p>' + escapeHtml(item.type) + ' / ' + escapeHtml(item.issuer || '追加した資格') +
     '</p></div></section>' + levelSelector(family, item) + '<div class="box"><h3>' +
     (family ? escapeHtml(item.name) + ' の教材と進捗' : '教材と進捗') + '</h3><p>' + (questions.length ? '演習 ' + questions.length + '問 ・ 回答済み ' + answered + '問' :
-      'サイト内演習は未収録です。公式教材を参照し、学習メモや自作問題を追加できます。') + '</p>' +
+      '<span class="badge soon">準備中</span> 演習問題は準備中です。公式教材を参照し、学習メモや自作問題を追加できます。') + '</p>' +
       (item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">認定団体のサイトを開く</a>' : '') +
     '</div><div class="actions">' +
     (questions.length ? '<a class="button primary" href="#practice">演習を始める</a>' : '') +
