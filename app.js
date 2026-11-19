@@ -15,6 +15,7 @@ function persist() {
   catch { toast('端末に保存できませんでした。ブラウザーの保存設定や空き容量を確認してください。'); return false; }
 }
 const index = typeof bankIndex === 'object' ? bankIndex : {};
+const siteLinks = typeof resources === 'object' ? resources : {};
 const types = [...new Set(groups.map(group => group[0]))];
 const icons = ['▤','☁','▣','⌘','◇','⬡','◉'];
 const catalog = groups.flatMap(([type, issuer, url, names], gi) => names.map((name, ei) => ({
@@ -262,7 +263,7 @@ function renderCourse(item) {
     (family ? escapeHtml(item.name) + ' の教材と進捗' : '教材と進捗') + '</h3><p>' + (questions.length ? '演習 ' + questions.length + '問 ・ 回答済み ' + answered + '問' :
       '<span class="badge soon">準備中</span> 演習問題は準備中です。公式教材を参照し、学習メモや自作問題を追加できます。') + '</p>' +
       (item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">認定団体のサイトを開く</a>' : '') +
-    '</div><div class="actions">' +
+    '</div>' + resourceList(item) + '<div class="actions">' +
     (questions.length ? '<a class="button primary" href="#practice">演習を始める</a>' : '') +
     '<button class="outline" data-question="' + item.id + '">問題を追加</button></div>' +
     '<form class="stack" id="note"><label class="field">学習メモ<textarea rows="4" maxlength="10000" placeholder="学習した内容や次回の復習ポイント">' +
@@ -271,6 +272,13 @@ function renderCourse(item) {
     event.preventDefault(); state.notes[item.id] = event.target.querySelector('textarea').value;
     if (persist()) event.target.querySelector('[role=status]').textContent = '保存しました';
   };
+}
+function resourceList(item) {
+  const links = siteLinks[item.id] || [];
+  if (!links.length) return '';
+  return '<section class="box"><h3>無料の学習サイト</h3><p class="subtext">過去問・教材を無料で使える外部サイトです（新しいタブで開きます）。</p><ul class="site-links">' +
+    links.map(link => '<li><a href="' + escapeHtml(link.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(link.title) +
+      '</a><span>' + escapeHtml(new URL(link.url).hostname) + '</span></li>').join('') + '</ul></section>';
 }
 function field(name, label, optional = false, type = 'text') {
   return '<label class="field">' + label + '<input name="' + name + '" type="' + type + '" maxlength="500" ' + (optional ? '' : 'required') + '></label>';
