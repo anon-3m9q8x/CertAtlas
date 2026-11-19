@@ -104,7 +104,7 @@ function levelSelector(family, item) {
     '</div></section>';
 }
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-const pageNames = { catalog:'資格カタログ', study:'マイ学習', review:'弱点復習' };
+const pageNames = { catalog:'資格カタログ' };
 let filter = { type:'すべて', query:'', material:'all' };
 let quiz = null;
 function toast(message) {
@@ -174,9 +174,7 @@ async function render() {
     link.classList.toggle('active', active);
     if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
   });
-  if (current === 'catalog') return renderCatalog();
-  if (current === 'study') return renderStudy();
-  return renderReview();
+  return renderCatalog();
 }
 function renderCatalog() {
   main.replaceChildren(document.querySelector('#catalog').content.cloneNode(true));
@@ -209,30 +207,8 @@ function renderResults() {
   main.querySelector('#count').textContent = items.length + '件の資格';
   main.querySelector('#results').innerHTML = items.length ? items.map(card).join('') : '<p class="box">条件に一致する資格がありません。</p>';
 }
-// Attempt keys are "<資格ID>:<問題ID>"; 資格IDs never contain a colon.
-const attemptRows = () => Object.entries(state.attempts).map(([key, record]) => ({ itemId: key.slice(0, key.indexOf(':')), record }));
-function renderStudy() {
-  const rows = attemptRows();
-  const attemptsCount = rows.reduce((sum, row) => sum + row.record.total, 0);
-  const correct = rows.reduce((sum, row) => sum + row.record.correct, 0);
-  const saved = all().filter(item => state.saved.includes(item.id));
-  main.innerHTML = '<h1>マイ学習</h1><p class="subtext">登録した資格、学習メモ、演習の成績をこのブラウザーに保存します。</p>' +
-    '<div class="box">回答 ' + attemptsCount + '回　｜　累計正答率 ' + (attemptsCount ? Math.round(100 * correct / attemptsCount) + '%' : '未集計') +
-    '</div><h2>学習中の資格</h2><div class="tiles stack">' + (saved.length ? grouped(saved).map(card).join('') :
-      '<p class="box">資格の詳細から「マイ学習に登録」を選択してください。</p>') + '</div>' +
-    '<div class="box"><h2>学習データ</h2><div class="actions stack"><button class="outline" data-export>JSONで書き出す</button></div></div>';
-}
 const missedOf = item => questionsOf(item).filter(question => recordOf(item, question)?.last === false);
-function renderReview(item = null) {
-  if (!item) {
-    const counts = {};
-    attemptRows().filter(row => row.record.last === false).forEach(row => { counts[row.itemId] = (counts[row.itemId] || 0) + 1; });
-    const levels = all().filter(level => counts[level.id]);
-    main.innerHTML = '<h1>弱点復習</h1><p class="subtext">資格を選ぶと、専用サイトで間違えた問題を復習できます。</p>' +
-      (levels.length ? levels.map(level => '<article class="box"><a href="' + schoolURL(level,'review') + '">' +
-        escapeHtml(level.name) + ' の復習を開く（' + counts[level.id] + '問）</a></article>').join('') : '<p class="box">復習対象の問題はありません。</p>');
-    return;
-  }
+function renderReview(item) {
   const missed = missedOf(item);
   main.innerHTML = '<h1>弱点復習</h1><p>' + escapeHtml(item.name) + '</p>' +
     (missed.length ? '<div class="box"><button class="primary" data-review>まとめて復習する（' + missed.length + '問）</button></div>' +
@@ -288,8 +264,7 @@ function renderCourse(item) {
       (item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">認定団体のサイトを開く</a>' : '') +
     '</div><div class="actions">' +
     (questions.length ? '<a class="button primary" href="#practice">演習を始める</a>' : '') +
-    '<button class="outline" data-save="' + item.id + '">' + (state.saved.includes(item.id) ? 'マイ学習から外す' : 'マイ学習に登録') +
-    '</button><button class="outline" data-question="' + item.id + '">問題を追加</button></div>' +
+    '<button class="outline" data-question="' + item.id + '">問題を追加</button></div>' +
     '<form class="stack" id="note"><label class="field">学習メモ<textarea rows="4" maxlength="10000" placeholder="学習した内容や次回の復習ポイント">' +
     escapeHtml(state.notes[item.id]) + '</textarea></label><div><button class="outline">メモを保存</button> <span role="status"></span></div></form>';
   main.querySelector('#note').onsubmit = event => {
@@ -320,7 +295,7 @@ if (!inSchool) document.querySelector('#add').onclick = () => {
       error.textContent = 'この資格はすでに登録されています。'; return;
     }
     const item = { ...data, id: 'u' + Date.now() + '-' + Math.random().toString(36).slice(2,8) };
-    state.custom.push(item); state.saved.push(item.id);
+    state.custom.push(item);
     persist(); render(); detail(item);
   };
 };
@@ -494,10 +469,6 @@ document.addEventListener('click', event => {
   const action = button.dataset;
   if (action.type) { filter.type = action.type; renderResults(); [...main.querySelectorAll('button[data-type]')].find(btn => btn.dataset.type === action.type)?.focus(); }
   if (action.detail) detail(all().find(item => item.id === action.detail));
-  if (action.save) {
-    state.saved = state.saved.includes(action.save) ? state.saved.filter(id => id !== action.save) : [...state.saved, action.save];
-    persist(); render(); detail(all().find(item => item.id === action.save));
-  }
   if (action.question) addQuestion(all().find(item => item.id === action.question));
   if (action.start) {
     const item = all().find(entry => entry.id === action.start);
@@ -505,7 +476,8 @@ document.addEventListener('click', event => {
     start(item, questionsOf(item).filter(inSet(set)), set === PRACTICE_ALL ? '問題集' : set || 'すべての問題');
   }
   if ('review' in action) { const item = selectedLevel(); start(item, missedOf(item), '弱点復習'); }
-  if (!quiz) { exportData(action); return; }
+  if ('close' in action) modal.close();
+  if (!quiz) return;
   if (action.pick !== undefined) pick(Number(action.pick));
   if (action.move) move(Number(action.move));
   if (action.goto !== undefined) { quiz.finished = false; quiz.index = Number(action.goto); renderQuiz(); }
@@ -513,16 +485,7 @@ document.addEventListener('click', event => {
   if (action.self !== undefined) grade(quiz.rows[quiz.index], action.self === '1');
   if ('retry' in action) start(quiz.item, quiz.rows.filter(row => row.done && !row.right).map(row => row.question), quiz.label + '（解き直し）');
   if ('quit' in action) { quiz = null; render(); }
-  if ('close' in action) modal.close();
 });
-function exportData(action) {
-  if ('close' in action) modal.close();
-  if ('export' in action) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type:'application/json' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'certatlas-progress.json'; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-}
 addEventListener('pageshow', event => {
   if (event.persisted) {
     try { state = { ...defaults, ...JSON.parse(localStorage.getItem(storageKey)) }; } catch {}
