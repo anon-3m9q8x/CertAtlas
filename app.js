@@ -12,16 +12,15 @@ try {
 }
 function persist() {
   try { localStorage.setItem(storageKey, JSON.stringify(state)); return true; }
-  catch { alert('端末に保存できませんでした。ブラウザーの保存設定や空き容量を確認してください。'); return false; }
+  catch { toast('端末に保存できませんでした。ブラウザーの保存設定や空き容量を確認してください。'); return false; }
 }
+const index = typeof bankIndex === 'object' ? bankIndex : {};
 const types = [...new Set(groups.map(group => group[0]))];
 const icons = ['▤','☁','▣','⌘','◇','⬡','◉'];
-const catalog = groups.flatMap(([type, issuer, url, entries], gi) => entries.map(([name, ...sample], ei) => ({
-  id: 'c' + gi + '-' + ei, type, issuer, url, name,
-  questions: sample.length ? [sample, ...(moreQuestions[name] || [])] : []
+const catalog = groups.flatMap(([type, issuer, url, names], gi) => names.map((name, ei) => ({
+  id: 'c' + gi + '-' + ei, type, issuer, url, name
 })));
 const all = () => [...catalog, ...state.custom];
-const questionsOf = item => [...(item.questions || []), ...(state.questions[item.id] || []), ...(levelExercises[item.name] && !item.id.startsWith('u') ? [levelExercises[item.name]] : [])];
 // Keep each level's original ID for bookmarks, notes, questions and answer history.
 const families = [
   ['LPIC', ['LPIC-1','LPIC-2','LPIC-3']],
@@ -32,7 +31,8 @@ const families = [
   ['PRINCE2', ['PRINCE2 Foundation','PRINCE2 Practitioner']],
   ['ITIL', ['ITIL Foundation','ITIL上位資格']],
   ['Juniper Enterprise', ['JNCIA-Junos','JNCIS-ENT','JNCIP-ENT','JNCIE-ENT']],
-  ['Cisco Enterprise', ['CCNP Enterprise','CCIE Enterprise Infrastructure']]
+  ['Cisco Enterprise', ['CCNP Enterprise','CCIE Enterprise Infrastructure']],
+  ['ORACLE MASTER', ['ORACLE MASTER Bronze DBA','ORACLE MASTER Silver DBA']]
 ].map(([name, names]) => ({name, levels: names.map(n => catalog.find(item => item.name === n))}));
 const familyOf = new Map(families.flatMap(f => f.levels.map(level => [level.id, f])));
 function grouped(items) {
@@ -45,8 +45,31 @@ function grouped(items) {
     return [{ ...item, name:family.name, levels:family.levels }];
   });
 }
-const countQuestions = item => (item.levels || [item]).reduce((n, level) => n + questionsOf(level).length, 0);
+// Question counts are known from the index on every page; full questions load only in the study room.
+const countOf = item => (index[item.id]?.count || 0) + (state.questions[item.id] || []).length;
+const countQuestions = item => (item.levels || [item]).reduce((n, level) => n + countOf(level), 0);
 const inSchool = document.body.hasAttribute('data-school');
+const bank = {};
+function customQuestions(item) {
+  return (state.questions[item.id] || []).map((t, i) => ({
+    id: 'u' + i, set: '自作問題', type: 'single', q: t[0], code: '', choices: [t[1], t[2], t[3]], answer: [0],
+    explanation: t[4], why: null, shuffle: true
+  }));
+}
+const questionsOf = item => [...(bank[item.id] || []), ...customQuestions(item)];
+async function loadBank(item) {
+  if (bank[item.id] || !index[item.id]) return;
+  try {
+    const response = await fetch('/data/bank/' + item.id + '.json');
+    if (!response.ok) throw new Error(response.status);
+    bank[item.id] = await response.json();
+  } catch {
+    bank[item.id] = [];
+    toast('問題データを読み込めませんでした。通信状況を確認して再読み込みしてください。');
+  }
+}
+const attemptKey = (item, question) => item.id + ':' + question.id;
+const recordOf = (item, question) => state.attempts[attemptKey(item, question)];
 if (inSchool) {
   const toggle = document.querySelector('#workspace-toggle');
   const menu = document.querySelector('#workspace-nav');
@@ -83,7 +106,13 @@ function levelSelector(family, item) {
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 const pageNames = { catalog:'資格カタログ', study:'マイ学習', review:'弱点復習' };
 let filter = { type:'すべて', query:'', material:'all' };
-let quiz;
+let quiz = null;
+function toast(message) {
+  let box = document.querySelector('#toast');
+  if (!box) { box = document.createElement('div'); box.id = 'toast'; box.setAttribute('role', 'status'); document.body.append(box); }
+  box.textContent = message; box.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { box.hidden = true; }, 5000);
+}
 function theme() { document.documentElement.dataset.theme = state.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
 theme();
 document.querySelector('#theme').onclick = () => {
@@ -99,15 +128,21 @@ function card(item) {
     escapeHtml(item.issuer || '追加した資格') + (item.levels ? ' ・ ' + item.levels.length + '段階' : '') + '</p><span class="course-cta">専用サイトで学ぶ</span></a></article>';
 }
 let lastRoute;
-function render() {
+async function render() {
   const page = location.hash.slice(1);
   if (modal.open && page !== lastRoute) modal.close();
+  if (page !== lastRoute) quiz = null;
   lastRoute = page;
   if (inSchool) {
     const item = selectedLevel();
     if (!item) {
       main.innerHTML = '<h1>資格が見つかりません</h1><a href="/#catalog">CertAtlasに戻る</a>';
       return;
+    }
+    if (!bank[item.id] && index[item.id]) {
+      main.innerHTML = '<p class="box">問題データを読み込んでいます…</p>';
+      await loadBank(item);
+      if (selectedLevel() !== item) return;
     }
     const title = (familyOf.get(item.id)?.name || item.name) + ' 学習室';
     document.title = title + ' | CertAtlas';
@@ -116,14 +151,10 @@ function render() {
       if (link.hash === ('#' + (page || 'home'))) link.setAttribute('aria-current','page');
       else link.removeAttribute('aria-current');
     });
+    if (quiz) return renderQuiz();
     if (page === 'review') renderReview(item);
-    else if (page === 'practice') {
-      const count = questionsOf(item).length;
-      main.innerHTML = '<h1>問題演習</h1><p>' + escapeHtml(item.name) + '</p><section class="box"><p>' +
-        (count ? count + '問の演習に取り組めます。' : 'このレベルの演習は未収録です。自作問題を追加できます。') +
-        '</p><div class="actions">' + (count ? '<button class="primary" data-start="' + item.id + '">演習を始める</button>' : '') +
-        '<button class="outline" data-question="' + item.id + '">問題を追加</button></div></section>';
-    } else if (page === 'notes') {
+    else if (page === 'practice') renderPractice(item);
+    else if (page === 'notes') {
       renderCourse(item);
       const note = main.querySelector('#note');
       main.innerHTML = '<h1>学習メモ</h1><p>' + escapeHtml(item.name) + '</p>';
@@ -169,7 +200,7 @@ function renderResults() {
   const parts = filter.query.normalize('NFKC').trim().toLowerCase().split(/\s+/);
   const matches = all().filter(item => {
     const haystack = (item.name + ' ' + (familyOf.get(item.id)?.name || '') + ' ' + item.issuer + ' ' + item.type).normalize('NFKC').toLowerCase();
-    const mode = questionsOf(item).length ? 'practice' : 'catalog';
+    const mode = countOf(item) ? 'practice' : 'catalog';
     return (filter.type === 'すべて' || item.type === filter.type) &&
       (filter.material === 'all' || filter.material === mode) && parts.every(part => haystack.includes(part));
   });
@@ -177,16 +208,12 @@ function renderResults() {
   main.querySelector('#count').textContent = items.length + '件の資格';
   main.querySelector('#results').innerHTML = items.length ? items.map(card).join('') : '<p class="box">条件に一致する資格がありません。</p>';
 }
-function records() {
-  return all().flatMap(item => questionsOf(item).map((question, index) => {
-    const idx = question === levelExercises[item.name] ? 'level-intro' : index;
-    return { item, question, idx, record: state.attempts[item.id + ':' + idx] };
-  }));
-}
+// Attempt keys are "<資格ID>:<問題ID>"; 資格IDs never contain a colon.
+const attemptRows = () => Object.entries(state.attempts).map(([key, record]) => ({ itemId: key.slice(0, key.indexOf(':')), record }));
 function renderStudy() {
-  const attempts = records().filter(row => row.record);
-  const attemptsCount = attempts.reduce((sum, row) => sum + row.record.total, 0);
-  const correct = attempts.reduce((sum, row) => sum + row.record.correct, 0);
+  const rows = attemptRows();
+  const attemptsCount = rows.reduce((sum, row) => sum + row.record.total, 0);
+  const correct = rows.reduce((sum, row) => sum + row.record.correct, 0);
   const saved = all().filter(item => state.saved.includes(item.id));
   main.innerHTML = '<h1>マイ学習</h1><p class="subtext">登録した資格、学習メモ、演習の成績をこのブラウザーに保存します。</p>' +
     '<div class="box">回答 ' + attemptsCount + '回　｜　累計正答率 ' + (attemptsCount ? Math.round(100 * correct / attemptsCount) + '%' : '未集計') +
@@ -194,19 +221,38 @@ function renderStudy() {
       '<p class="box">資格の詳細から「マイ学習に登録」を選択してください。</p>') + '</div>' +
     '<div class="box"><h2>学習データ</h2><div class="actions stack"><button class="outline" data-export>JSONで書き出す</button></div></div>';
 }
+const missedOf = item => questionsOf(item).filter(question => recordOf(item, question)?.last === false);
 function renderReview(item = null) {
-  const missed = records().filter(row => row.record?.last === false && (!item || row.item.id === item.id));
   if (!item) {
-    const levels = [...new Set(missed.map(row => row.item))];
+    const counts = {};
+    attemptRows().filter(row => row.record.last === false).forEach(row => { counts[row.itemId] = (counts[row.itemId] || 0) + 1; });
+    const levels = all().filter(level => counts[level.id]);
     main.innerHTML = '<h1>弱点復習</h1><p class="subtext">資格を選ぶと、専用サイトで間違えた問題を復習できます。</p>' +
       (levels.length ? levels.map(level => '<article class="box"><a href="' + schoolURL(level,'review') + '">' +
-        escapeHtml(level.name) + ' の復習を開く</a></article>').join('') : '<p class="box">復習対象の問題はありません。</p>');
+        escapeHtml(level.name) + ' の復習を開く（' + counts[level.id] + '問）</a></article>').join('') : '<p class="box">復習対象の問題はありません。</p>');
     return;
   }
+  const missed = missedOf(item);
   main.innerHTML = '<h1>弱点復習</h1><p>' + escapeHtml(item.name) + '</p>' +
     (missed.length ? '<div class="box"><button class="primary" data-review>まとめて復習する（' + missed.length + '問）</button></div>' +
-      missed.map(row => '<article class="box"><h3>' + escapeHtml(row.question[0]) + '</h3></article>').join('') :
+      missed.map(question => '<article class="box"><h3>' + escapeHtml(question.q) + '</h3></article>').join('') :
       '<p class="box">このレベルに復習対象の問題はありません。</p>');
+}
+function renderPractice(item) {
+  const questions = questionsOf(item);
+  const sets = [...new Set(questions.map(question => question.set))];
+  const answered = questions.filter(question => recordOf(item, question)).length;
+  main.innerHTML = '<h1>問題演習</h1><p>' + escapeHtml(item.name) + '</p>' +
+    (questions.length ? '<section class="box"><h2>出題セットを選ぶ</h2><p class="subtext">全' + questions.length + '問 ・ 回答済み ' + answered +
+      '問。選択肢は 1〜5 キー、Enter で次へ、← → で問題を移動できます。</p><div class="set-list">' +
+      setButton(item, '', 'すべての問題', questions.length) +
+      sets.map(set => setButton(item, set, set, questions.filter(question => question.set === set).length)).join('') +
+      '</div></section>' : '<section class="box"><p>このレベルの演習は未収録です。自作問題を追加できます。</p></section>') +
+    '<div class="actions"><button class="outline" data-question="' + item.id + '">問題を追加</button></div>';
+}
+function setButton(item, set, label, size) {
+  return '<button class="set-button" data-start="' + item.id + '" data-set="' + escapeHtml(set) + '"><strong>' + escapeHtml(label) +
+    '</strong><span>' + size + '問</span></button>';
 }
 function show(title, contents) {
   modalTitle.textContent = title;
@@ -221,14 +267,14 @@ function detail(item) {
 function renderCourse(item) {
   const questions = questionsOf(item);
   const family = familyOf.get(item.id);
-  const history = records().filter(row => row.item.id === item.id && row.record);
+  const answered = questions.filter(question => recordOf(item, question)).length;
   main.innerHTML = '<section class="hero course-hero"><div class="hero-inner"><div class="eyebrow">学習ホーム</div><h1>' + escapeHtml(family?.name || item.name) + '</h1><p>' + escapeHtml(item.type) + ' / ' + escapeHtml(item.issuer || '追加した資格') +
     '</p></div></section>' + levelSelector(family, item) + '<div class="box"><h3>' +
-    (family ? escapeHtml(item.name) + ' の教材と進捗' : '教材と進捗') + '</h3><p>' + (questions.length ? '演習 ' + questions.length + '問 ・ 回答済み ' + history.length + '問' :
+    (family ? escapeHtml(item.name) + ' の教材と進捗' : '教材と進捗') + '</h3><p>' + (questions.length ? '演習 ' + questions.length + '問 ・ 回答済み ' + answered + '問' :
       'サイト内演習は未収録です。公式教材を参照し、学習メモや自作問題を追加できます。') + '</p>' +
       (item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">認定団体のサイトを開く</a>' : '') +
     '</div><div class="actions">' +
-    (questions.length ? '<button class="primary" data-start="' + item.id + '">演習を始める</button>' : '') +
+    (questions.length ? '<a class="button primary" href="#practice">演習を始める</a>' : '') +
     '<button class="outline" data-save="' + item.id + '">' + (state.saved.includes(item.id) ? 'マイ学習から外す' : 'マイ学習に登録') +
     '</button><button class="outline" data-question="' + item.id + '">問題を追加</button></div>' +
     '<form class="stack" id="note"><label class="field">学習メモ<textarea rows="4" maxlength="10000" placeholder="学習した内容や次回の復習ポイント">' +
@@ -280,56 +326,155 @@ function addQuestion(item) {
     (state.questions[item.id] ||= []).push(question); persist(); render(); detail(item);
   };
 }
-function start(rows, item = null) {
-  quiz = { rows, item, index: 0, correct: 0, answered: false };
-  nextQuestion();
+
+/* ---------- 演習画面 ---------- */
+function start(item, questions, label) {
+  if (!questions.length) return;
+  quiz = {
+    item, label, index: 0, finished: false,
+    rows: questions.map(question => {
+      const order = question.choices.map((_, i) => i);
+      if (question.shuffle) for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+      return { question, order, picked: [], done: false, right: null, text: '' };
+    })
+  };
+  renderQuiz();
 }
-function nextQuestion() {
-  const row = quiz.rows[quiz.index];
-  if (!row) {
-    show('演習結果', '<div class="box"><h3>' + quiz.correct + ' / ' + quiz.rows.length + '問 正解</h3></div>' +
-      (quiz.item ? '<button class="outline" data-detail="' + quiz.item.id + '">資格詳細に戻る</button>' : '<button class="outline" data-close>弱点復習に戻る</button>'));
-    return;
-  }
-  quiz.answered = false;
-  const [prompt, ...answers] = row.question;
-  const order = [0, 1, 2];
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  show(row.item.name, '<p class="subtext">' + (quiz.index + 1) + ' / ' + quiz.rows.length + '問</p><h3>' +
-    escapeHtml(prompt) + '</h3><div class="stack">' + order.map(i => '<button class="option" data-answer="' + i + '">' +
-    escapeHtml(answers[i]) + '</button>').join('') + '<div id="feedback" class="feedback" role="status" hidden></div>' +
-    '<div><button id="next" class="primary" data-next hidden>' + (quiz.index + 1 === quiz.rows.length ? '結果を見る' : '次の問題') +
-    '</button></div></div>');
-  modalContent.querySelector('.option').focus();
+const needed = question => question.type === 'multiple' ? question.answer.length : 1;
+function statusBar() {
+  return '<ol class="q-status" aria-label="各問題の合否">' + quiz.rows.map((row, i) =>
+    '<li><button data-goto="' + i + '" class="' + (row.done ? (row.right ? 'is-right' : 'is-wrong') : '') + (i === quiz.index && !quiz.finished ? ' is-current' : '') +
+    '" aria-label="問' + (i + 1) + '：' + (row.done ? (row.right ? '正解' : '不正解') : '未回答') + '"' + (i === quiz.index && !quiz.finished ? ' aria-current="step"' : '') + '>' +
+    (i + 1) + '</button></li>').join('') + '</ol>';
 }
-function answer(index) {
-  if (!quiz || quiz.answered) return;
-  quiz.answered = true;
+function marked(text, mark) {
+  const at = mark ? text.indexOf(mark) : -1;
+  if (at < 0) return escapeHtml(text);
+  return escapeHtml(text.slice(0, at)) + '<mark class="miss">' + escapeHtml(mark) + '</mark>' + escapeHtml(text.slice(at + mark.length));
+}
+function renderQuiz() {
+  if (quiz.finished) return renderResult();
   const row = quiz.rows[quiz.index];
-  const key = row.item.id + ':' + row.idx;
-  const record = state.attempts[key] ||= { total:0, correct:0, last:null };
-  const right = index === 0;
-  record.total++;
-  record.last = right;
-  if (right) { record.correct++; quiz.correct++; }
+  const question = row.question;
+  const done = quiz.rows.filter(entry => entry.done);
+  const score = done.filter(entry => entry.right).length;
+  let body = '';
+  if (question.type === 'fill' || question.type === 'written') {
+    body = question.type === 'fill'
+      ? '<form class="fill" id="fill"><label class="field">解答を入力<input name="answer" autocomplete="off" spellcheck="false" ' + (row.done ? 'disabled value="' + escapeHtml(row.text) + '"' : '') + '></label>' +
+        (row.done ? '' : '<button class="primary">回答する（Enter）</button>') + '</form>'
+      : (row.done ? '' : '<div class="actions"><button class="primary" data-reveal>模範解答を見る（Enter）</button></div>');
+    if (question.type === 'written' && row.revealed && !row.done)
+      body += '<div class="model"><h3>模範解答</h3><p>' + escapeHtml(question.model) + '</p></div><div class="actions"><button class="primary" data-self="1">1　書けた</button><button class="outline" data-self="0">2　書けなかった</button></div>';
+  } else {
+    body = '<div class="choices' + (row.done ? ' revealed' : '') + '">' + row.order.map((choiceIndex, position) => {
+      const isAnswer = question.answer.includes(choiceIndex);
+      const isPicked = row.picked.includes(choiceIndex);
+      const why = question.why?.[choiceIndex];
+      const state = row.done ? (isAnswer ? 'is-answer' : isPicked ? 'is-miss' : 'is-other') : (isPicked ? 'is-picked' : '');
+      return '<div class="choice ' + state + '"><button class="option" data-pick="' + position + '"' + (row.done ? ' disabled' : '') + ' aria-pressed="' + isPicked + '">' +
+        '<kbd>' + (position + 1) + '</kbd><span class="option-text">' + (row.done && !isAnswer ? marked(question.choices[choiceIndex], why?.mark) : escapeHtml(question.choices[choiceIndex])) + '</span>' +
+        (row.done ? '<span class="verdict">' + (isAnswer ? '正解' : isPicked ? 'あなたの回答' : '誤り') + '</span>' : '') + '</button>' +
+        (row.done && why ? '<p class="why"><span class="why-label">' + (isAnswer ? 'ここが正しい' : (why.mark ? '「' + escapeHtml(why.mark) + '」が誤り' : '誤り')) + '</span>' + escapeHtml(why.reason) + '</p>' : '') +
+        '</div>';
+    }).join('') + '</div>';
+  }
+  let feedback = '';
+  if (row.done) {
+    feedback = '<div class="feedback ' + (row.right ? 'ok' : 'ng') + '" role="status"><strong>' + (row.right ? '正解' : '不正解') + '</strong>' +
+      (question.type === 'fill' ? '<p>正答：' + escapeHtml((question.accept || [question.model]).join(' ／ ')) + '</p>' : '') +
+      (question.type === 'written' ? '<div class="model"><h3>模範解答</h3><p>' + escapeHtml(question.model) + '</p></div>' : '') +
+      '<h3>解説</h3><p>' + escapeHtml(question.explanation) + '</p>' + (question.note ? '<p class="subtext">補足：' + escapeHtml(question.note) + '</p>' : '') + '</div>';
+  }
+  const last = quiz.index === quiz.rows.length - 1;
+  main.innerHTML = '<section class="quiz" aria-labelledby="quiz-title">' +
+    '<div class="quiz-head"><div><p class="subtext">' + escapeHtml(quiz.item.name) + ' ・ ' + escapeHtml(quiz.label) + '</p><h1 id="quiz-title">問題演習</h1></div>' +
+    '<div class="quiz-score">' + score + ' / ' + done.length + ' 正解<button class="outline" data-quit>演習を終了</button></div></div>' +
+    statusBar() +
+    '<article class="question-card"><p class="q-meta"><span>問 ' + (quiz.index + 1) + ' / ' + quiz.rows.length + '</span><span class="tag">' + escapeHtml(question.set) + '</span>' +
+    (question.type === 'multiple' ? '<span class="tag">' + needed(question) + 'つ選択</span>' : '') + '</p>' +
+    '<h2 class="q-text">' + escapeHtml(question.q) + '</h2>' + (question.code ? '<pre class="q-code">' + escapeHtml(question.code) + '</pre>' : '') +
+    body + feedback +
+    '<div class="quiz-nav"><button class="outline" data-move="-1"' + (quiz.index ? '' : ' disabled') + '>← 前の問題</button>' +
+    '<button class="primary" data-move="1"' + (row.done ? '' : ' hidden') + '>' + (last ? '結果を見る（Enter）' : '次の問題（Enter）→') + '</button>' +
+    (row.done || last ? '' : '<button class="outline" data-move="1">スキップ →</button>') + '</div>' +
+    '<p class="key-help subtext">キー操作：1〜' + Math.max(2, question.choices.length) + ' で選択 ／ Enter で次へ ／ ← → で問題を移動</p></article></section>';
+  const input = main.querySelector('#fill input:not([disabled])');
+  if (input) input.focus();
+  else main.querySelector('.q-status .is-current')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+}
+function grade(row, right) {
+  row.done = true; row.right = right;
+  const record = state.attempts[attemptKey(quiz.item, row.question)] ||= { total:0, correct:0, last:null };
+  record.total++; record.last = right; if (right) record.correct++;
   persist();
-  modalContent.querySelectorAll('.option').forEach(button => {
-    button.disabled = true;
-    if (button.dataset.answer === '0') button.classList.add('correct');
-    else if (+button.dataset.answer === index) button.classList.add('wrong');
-  });
-  const feedback = modalContent.querySelector('#feedback');
-  feedback.hidden = false;
-  feedback.innerHTML = '<strong>' + (right ? '正解' : '不正解 ・ 正答は ' + escapeHtml(row.question[1])) + '</strong><p>' +
-    escapeHtml(row.question[4]) + '</p>';
-  const next = modalContent.querySelector('#next');
-  next.hidden = false;
-  next.focus();
-  render();
+  renderQuiz();
+  main.querySelector('.feedback')?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
+function pick(position) {
+  const row = quiz.rows[quiz.index];
+  const question = row.question;
+  if (row.done || !['single', 'multiple'].includes(question.type)) return;
+  const choiceIndex = row.order[position];
+  if (choiceIndex === undefined) return;
+  if (question.type === 'single') row.picked = [choiceIndex];
+  else row.picked = row.picked.includes(choiceIndex) ? row.picked.filter(i => i !== choiceIndex) : [...row.picked, choiceIndex];
+  // The answer appears as soon as the required number of choices is selected.
+  if (row.picked.length === needed(question))
+    grade(row, row.picked.length === question.answer.length && row.picked.every(i => question.answer.includes(i)));
+  else renderQuiz();
+}
+const normalizeAnswer = value => value.normalize('NFKC').trim().replace(/\s+/g, ' ').replace(/(.)\/$/, '$1');
+function submitFill(value) {
+  const row = quiz.rows[quiz.index];
+  if (row.done || !value.trim()) return;
+  row.text = value;
+  const accept = (row.question.accept?.length ? row.question.accept : [row.question.model]).map(normalizeAnswer);
+  grade(row, accept.includes(normalizeAnswer(value)));
+}
+function move(step) {
+  if (!quiz || quiz.finished) return;
+  const next = quiz.index + step;
+  if (next >= quiz.rows.length) { quiz.finished = true; return renderQuiz(); }
+  if (next < 0) return;
+  quiz.index = next; renderQuiz();
+}
+function renderResult() {
+  const done = quiz.rows.filter(row => row.done);
+  const right = done.filter(row => row.right).length;
+  const wrong = quiz.rows.map((row, i) => ({ row, i })).filter(entry => entry.row.done && !entry.row.right);
+  main.innerHTML = '<section class="quiz"><div class="quiz-head"><div><p class="subtext">' + escapeHtml(quiz.item.name) + ' ・ ' + escapeHtml(quiz.label) + '</p><h1>演習結果</h1></div></div>' +
+    statusBar() + '<div class="box result"><p class="result-score"><strong>' + right + '</strong> / ' + quiz.rows.length + ' 問正解</p><p class="subtext">回答 ' + done.length + '問 ・ 未回答 ' + (quiz.rows.length - done.length) + '問</p>' +
+    '<div class="actions">' + (wrong.length ? '<button class="primary" data-retry>間違えた ' + wrong.length + '問を解き直す</button>' : '') +
+    '<button class="outline" data-goto="0">最初の問題から見直す</button><button class="outline" data-quit>出題セットに戻る</button></div></div>' +
+    (wrong.length ? '<h2>間違えた問題</h2>' + wrong.map(entry => '<article class="box"><button class="link-like" data-goto="' + entry.i + '">問' + (entry.i + 1) + '：' + escapeHtml(entry.row.question.q) + '</button></article>').join('') : '') + '</section>';
+}
+document.addEventListener('keydown', event => {
+  if (!quiz || modal.open || event.altKey || event.ctrlKey || event.metaKey) return;
+  const typing = event.target.closest?.('input, textarea, select');
+  const row = quiz.rows[quiz.index];
+  if (typing) return; // 入力欄では Enter をフォーム送信に任せる
+  if (quiz.finished) return;
+  if (event.key === 'ArrowRight') { event.preventDefault(); move(1); }
+  else if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); }
+  else if (event.key === 'Enter') {
+    if (event.target.closest?.('button') && !event.target.closest('.option')) return; // ボタンにフォーカスがある時はそのボタンを優先
+    event.preventDefault();
+    if (row.done) move(1);
+    else if (row.question.type === 'written' && !row.revealed) { row.revealed = true; renderQuiz(); }
+  } else if (/^[1-9]$/.test(event.key)) {
+    if (row.question.type === 'written' && row.revealed && !row.done && (event.key === '1' || event.key === '2')) grade(row, event.key === '1');
+    else pick(Number(event.key) - 1);
+  }
+});
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'fill') return;
+  event.preventDefault();
+  submitFill(event.target.answer.value);
+});
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
@@ -343,18 +488,28 @@ document.addEventListener('click', event => {
   if (action.question) addQuestion(all().find(item => item.id === action.question));
   if (action.start) {
     const item = all().find(entry => entry.id === action.start);
-    start(records().filter(row => row.item.id === item.id), item);
+    const set = action.set || '';
+    start(item, questionsOf(item).filter(question => !set || question.set === set), set || 'すべての問題');
   }
-  if ('review' in action) start(records().filter(row => row.record?.last === false && row.item.id === selectedLevel()?.id));
-  if ('answer' in action) answer(+action.answer);
-  if ('next' in action) { quiz.index++; nextQuestion(); }
+  if ('review' in action) { const item = selectedLevel(); start(item, missedOf(item), '弱点復習'); }
+  if (!quiz) { exportData(action); return; }
+  if (action.pick !== undefined) pick(Number(action.pick));
+  if (action.move) move(Number(action.move));
+  if (action.goto !== undefined) { quiz.finished = false; quiz.index = Number(action.goto); renderQuiz(); }
+  if ('reveal' in action) { quiz.rows[quiz.index].revealed = true; renderQuiz(); }
+  if (action.self !== undefined) grade(quiz.rows[quiz.index], action.self === '1');
+  if ('retry' in action) start(quiz.item, quiz.rows.filter(row => row.done && !row.right).map(row => row.question), quiz.label + '（解き直し）');
+  if ('quit' in action) { quiz = null; render(); }
+  if ('close' in action) modal.close();
+});
+function exportData(action) {
   if ('close' in action) modal.close();
   if ('export' in action) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type:'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'certatlas-progress.json'; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-});
+}
 addEventListener('pageshow', event => {
   if (event.persisted) {
     try { state = { ...defaults, ...JSON.parse(localStorage.getItem(storageKey)) }; } catch {}
